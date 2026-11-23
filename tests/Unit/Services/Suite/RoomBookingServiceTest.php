@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Events\NewBookingReceived;
 use App\Models\Suite\Room;
 use App\Models\Suite\RoomAddonService;
 use App\Models\Suite\RoomBooking;
@@ -10,6 +11,7 @@ use App\Models\User;
 use App\Services\Suite\RoomBookingService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
@@ -280,6 +282,8 @@ it('checks in, checks out into housekeeping, and makes the room available after 
 });
 
 it('shows the booking, validates payment, and requests confirmation before saving', function () {
+    Event::fake([NewBookingReceived::class]);
+
     $category = RoomCategory::query()->create(['name' => 'Standard', 'slug' => 'standard']);
     $room = Room::query()->create([
         'category_id' => $category->id,

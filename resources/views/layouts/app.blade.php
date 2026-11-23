@@ -5,7 +5,14 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="csrf-token" content="{{ csrf_token() }}">
 
-        <title>{{ config('app.name', 'Laravel') }}</title>
+        <title>{{ config('app.name', 'HHRL') }}</title>
+
+        <script>
+            // Ensure local development runs on HTTP so WebSocket (Reverb) connects without mixed-content blocking
+            if (window.location.protocol === 'https:' && (window.location.hostname === 'hhrl-v2.test' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+                window.location.replace(window.location.href.replace('https:', 'http:'));
+            }
+        </script>
 
         <link rel="preconnect" href="https://fonts.bunny.net">
         <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
@@ -36,6 +43,7 @@
                     <div class="mr-1 sm:mr-4 lg:mr-8 flex items-center gap-1.5 sm:gap-2">
                         {{-- Real-time Bell Notifications Dropdown --}}
                         <livewire:notifications.bell-dropdown />
+                        <livewire:notifications.suite-notification />
 
                         {{-- Chat Icon with Dynamic Color --}}
                         <x-ts-button.circle icon="chat-bubble-left-right"

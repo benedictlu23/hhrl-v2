@@ -2,6 +2,7 @@
 
 namespace App\Models\Suite;
 
+use App\Events\NewBookingReceived;
 use Database\Factories\BookingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -75,6 +76,12 @@ class RoomBooking extends Model
         static::creating(function (RoomBooking $booking) {
             if (empty($booking->booking_code)) {
                 $booking->booking_code = strtoupper('AGRO-' . Str::random(8));
+            }
+        });
+
+        static::created(function (RoomBooking $booking): void {
+            if ($booking->isPending()) {
+                NewBookingReceived::dispatch($booking);
             }
         });
     }
