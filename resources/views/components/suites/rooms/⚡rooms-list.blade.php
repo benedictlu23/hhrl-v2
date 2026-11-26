@@ -16,6 +16,7 @@ new class extends Component {
     public string $search = '';
     public ?int $categoryId = null;
     public string $statusFilter = '';
+    public string $typeFilter = '';
     public ?string $feedbackMessage = null;
 
     public function updateRoomStatus(int $roomId, string $newStatus): void
@@ -54,6 +55,7 @@ new class extends Component {
         return [
             'roomListHeader' => [
                 ['index' => 'status', 'label' => 'status', 'sortable' => false], 
+                ['index' => 'type', 'label' => 'type', 'sortable' => false], 
                 ['index' => 'room_number', 'label' => 'room #', 'sortable' => false], 
                 ['index' => 'name', 'label' => 'Name', 'sortable' => false], 
                 ['index' => 'category_name', 'label' => 'category', 'sortable' => false], 
@@ -72,6 +74,7 @@ new class extends Component {
             })
             ->when($this->categoryId, fn ($q) => $q->where('category_id', $this->categoryId))
             ->when(filled($this->statusFilter), fn ($q) => $q->where('status', $this->statusFilter))
+            ->when(filled($this->typeFilter), fn ($q) => $q->where('type', $this->typeFilter))
             ->orderBy('room_number')
             ->paginate(10),
     
@@ -107,6 +110,13 @@ new class extends Component {
                 <option value="maintenance">Maintenance</option>
                 <option value="out_of_service">Out of Service</option>
                 <option value="blocked">Blocked</option>
+            </select>
+
+            <select wire:model.live="typeFilter"
+                    class="px-3 py-2 bg-white border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm">
+                <option value="">All Types</option>
+                <option value="room">Rooms</option>
+                <option value="cottage">Cottages</option>
             </select>
         </div>
 
@@ -217,6 +227,14 @@ new class extends Component {
                         <x-ts-badge text="Out of service" color="gray" />
                     @elseif($row->status == 'blocked')
                         <x-ts-badge text="Blocked" color="rose" />
+                    @endif
+                @endinteract
+
+                @interact('column_type', $row)
+                    @if($row->type === 'cottage')
+                        <x-ts-badge text="Cottage" color="amber" />
+                    @else
+                        <x-ts-badge text="Room" color="blue" />
                     @endif
                 @endinteract
 

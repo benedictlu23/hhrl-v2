@@ -26,6 +26,7 @@ use Illuminate\Support\Carbon;
     'floor_number',
     'status',
     'booking_type',
+    'type',
     'is_active',
 ])]
 class Room extends Model
@@ -57,6 +58,13 @@ class Room extends Model
     public function amenities(): BelongsToMany
     {
         return $this->belongsToMany(Amenity::class, 'room_room_amenities', 'room_id', 'amenity_id');
+    }
+
+    public function addonServices(): BelongsToMany
+    {
+        return $this->belongsToMany(RoomAddonService::class, 'room_room_addon_services', 'room_id', 'addon_service_id')
+            ->withPivot('max_quantity')
+            ->withTimestamps();
     }
 
     public function photos(): HasMany

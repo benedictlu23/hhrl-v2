@@ -6,17 +6,21 @@ use Livewire\WithPagination;
 use App\Models\Suite\RoomCategory;
 use App\Models\Suite\Amenity;
 use App\Models\Suite\RoomAddonService;
+use App\Models\Suite\RoomPaymentMethod;
 use TallStackUi\Traits\Interactions;
 use App\Services\Suite\AmenityService;
 use App\Services\Suite\RoomCategoryService;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Livewire\WithFileUploads;
 
 new class extends Component
 {
     use WithPagination;
+    use WithFileUploads;
     use Interactions;
 
     public int $tabNum = 1;
@@ -44,6 +48,20 @@ new class extends Component
     public float $addonServicePrice = 0.0;
     public bool $addonServiceIsActive = true;
     public int $addonServiceSortOrder = 0;
+
+    // Payment Method form state
+    public bool $createPaymentMethodModal = false;
+    public bool $editPaymentMethodModal = false;
+    public ?int $paymentMethodId = null;
+    public string $paymentMethodName = '';
+    public string $paymentMethodCode = '';
+    public ?string $paymentMethodAccountName = null;
+    public ?string $paymentMethodAccountNumber = null;
+    public ?string $paymentMethodInstructions = null;
+    public $paymentMethodQrCode = null;
+    public ?string $paymentMethodCurrentQrPath = null;
+    public bool $paymentMethodIsEnabled = true;
+    public int $paymentMethodSortOrder = 0;
 
     public function mount(): void
     {
@@ -100,6 +118,20 @@ new class extends Component
                 ['index' => 'action', 'label' => 'Action', 'sortable' => false],
             ],
             'addonServiceRows' => RoomAddonService::query()
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->paginate(10)
+                ->withQueryString(),
+            'paymentMethodHeaders' => [
+                ['index' => 'name', 'label' => 'Payment Method'],
+                ['index' => 'code', 'label' => 'Code / Slug'],
+                ['index' => 'account_name', 'label' => 'Account Name'],
+                ['index' => 'account_number', 'label' => 'Account Number'],
+                ['index' => 'qr_code_path', 'label' => 'QR Code', 'sortable' => false],
+                ['index' => 'is_enabled', 'label' => 'Status', 'sortable' => false],
+                ['index' => 'action', 'label' => 'Action', 'sortable' => false],
+            ],
+            'paymentMethodRows' => RoomPaymentMethod::query()
                 ->orderBy('sort_order')
                 ->orderBy('name')
                 ->paginate(10)
@@ -541,6 +573,208 @@ new class extends Component
         $this->addonServiceIsActive = true;
     }
 
+    public function openPaymentMethodModal(): void
+    {
+        $this->resetPaymentMethodForm();
+        $this->resetValidation();
+        $this->createPaymentMethodModal = true;
+    }
+
+    public function editPaymentMethodAction(int $id): void
+    {
+        $pm = RoomPaymentMethod::query()->findOrFail($id);
+        $this->paymentMethodId = $pm->id;
+        $this->paymentMethodName = $pm->name;
+        $this->paymentMethodCode = $pm->code;
+        $this->paymentMethodAccountName = $pm->account_name;
+        $this->paymentMethodAccountNumber = $pm->account_number;
+        $this->paymentMethodInstructions = $pm->instructions;
+        $this->paymentMethodCurrentQrPath = $pm->qr_code_path;
+        $this->paymentMethodQrCode = null;
+        $this->paymentMethodIsEnabled = $pm->is_enabled;
+        $this->paymentMethodSortOrder = $pm->sort_order;
+        $this->resetValidation();
+        $this->editPaymentMethodModal = true;
+    }
+
+    public function savePaymentMethodAction(): void
+    {
+        $this->validate($this->paymentMethodRules());
+        $this->createPaymentMethodModal = false;
+        $this->dialog()
+            ->question('Save Payment Method?', 'Are you sure you want to save this payment method?')
+            ->confirm('Confirm', 'createPaymentMethod')
+            ->cancel('Cancel')
+            ->send();
+    }
+
+    public function createPaymentMethod(): void
+    {
+        $validated = $this->validate($this->paymentMethodRules());
+
+        try {
+            $qrPath = null;
+            if ($this->paymentMethodQrCode) {
+                $stored = $this->paymentMethodQrCode->store('payment-methods', 'public');
+                $qrPath = asset('storage/'.$stored);
+            }
+
+            RoomPaymentMethod::create([
+                'name' => $validated['paymentMethodName'],
+                'code' => Str::slug($validated['paymentMethodCode']),
+                'account_name' => $validated['paymentMethodAccountName'] ?: null,
+                'account_number' => $validated['paymentMethodAccountNumber'] ?: null,
+                'instructions' => $validated['paymentMethodInstructions'] ?: null,
+                'qr_code_path' => $qrPath,
+                'is_enabled' => $validated['paymentMethodIsEnabled'],
+                'sort_order' => $validated['paymentMethodSortOrder'],
+            ]);
+
+            $this->createPaymentMethodModal = false;
+            $this->resetPaymentMethodForm();
+            $this->toast()->success('Success', $validated['paymentMethodName'].' created successfully!')->send();
+        } catch (\Throwable $exception) {
+            Log::error('Create payment method failed.', ['exception' => $exception]);
+            $this->toast()->error('Error', 'Unable to create payment method. Please try again.')->send();
+        }
+    }
+
+    public function savePaymentMethodUpdateAction(): void
+    {
+        $this->validate($this->paymentMethodRules($this->paymentMethodId));
+        $this->editPaymentMethodModal = false;
+        $this->dialog()
+            ->question('Update Payment Method?', 'Are you sure you want to update this payment method?')
+            ->confirm('Confirm', 'updatePaymentMethod')
+            ->cancel('Cancel')
+            ->send();
+    }
+
+    public function updatePaymentMethod(): void
+    {
+        $validated = $this->validate([
+            'paymentMethodId' => ['required', 'integer', 'exists:room_payment_methods,id'],
+            ...$this->paymentMethodRules($this->paymentMethodId),
+        ]);
+
+        try {
+            $pm = RoomPaymentMethod::query()->findOrFail($validated['paymentMethodId']);
+
+            $qrPath = $pm->qr_code_path;
+            if ($this->paymentMethodQrCode) {
+                if ($qrPath) {
+                    $rawOld = str_replace(asset('storage/'), '', $qrPath);
+                    if ($rawOld && Storage::disk('public')->exists($rawOld)) {
+                        Storage::disk('public')->delete($rawOld);
+                    }
+                }
+                $stored = $this->paymentMethodQrCode->store('payment-methods', 'public');
+                $qrPath = asset('storage/'.$stored);
+            }
+
+            $pm->update([
+                'name' => $validated['paymentMethodName'],
+                'code' => Str::slug($validated['paymentMethodCode']),
+                'account_name' => $validated['paymentMethodAccountName'] ?: null,
+                'account_number' => $validated['paymentMethodAccountNumber'] ?: null,
+                'instructions' => $validated['paymentMethodInstructions'] ?: null,
+                'qr_code_path' => $qrPath,
+                'is_enabled' => $validated['paymentMethodIsEnabled'],
+                'sort_order' => $validated['paymentMethodSortOrder'],
+            ]);
+
+            $this->editPaymentMethodModal = false;
+            $this->resetPaymentMethodForm();
+            $this->toast()->success('Success', $pm->name.' updated successfully!')->send();
+        } catch (\Throwable $exception) {
+            Log::error('Update payment method failed.', ['exception' => $exception]);
+            $this->toast()->error('Error', 'Unable to update payment method. Please try again.')->send();
+        }
+    }
+
+    public function togglePaymentMethodStatus(int $id): void
+    {
+        try {
+            $pm = RoomPaymentMethod::query()->findOrFail($id);
+            $pm->update(['is_enabled' => ! $pm->is_enabled]);
+            $this->toast()->success('Success', $pm->name.($pm->is_enabled ? ' enabled!' : ' disabled!'))->send();
+        } catch (\Throwable $exception) {
+            Log::error('Toggle payment method failed.', ['exception' => $exception]);
+            $this->toast()->error('Error', 'Unable to change status. Please try again.')->send();
+        }
+    }
+
+    public function deletePaymentMethodAction(int $id): void
+    {
+        $pm = RoomPaymentMethod::query()->findOrFail($id);
+        $this->paymentMethodId = $pm->id;
+
+        $this->dialog()
+            ->question('Delete Payment Method?', 'Are you sure you want to delete '.$pm->name.'?')
+            ->confirm('Confirm', 'deletePaymentMethod')
+            ->cancel('Cancel')
+            ->send();
+    }
+
+    public function deletePaymentMethod(): void
+    {
+        $validated = $this->validate([
+            'paymentMethodId' => ['required', 'integer', 'exists:room_payment_methods,id'],
+        ]);
+
+        try {
+            $pm = RoomPaymentMethod::query()->findOrFail($validated['paymentMethodId']);
+            if ($pm->qr_code_path) {
+                Storage::disk('public')->delete($pm->qr_code_path);
+            }
+            $name = $pm->name;
+            $pm->delete();
+
+            $this->resetPaymentMethodForm();
+            $this->toast()->success('Success', $name.' deleted successfully!')->send();
+        } catch (\Throwable $exception) {
+            Log::error('Delete payment method failed.', ['exception' => $exception]);
+            $this->toast()->error('Error', 'Unable to delete payment method.')->send();
+        }
+    }
+
+    private function paymentMethodRules(?int $ignoreId = null): array
+    {
+        return [
+            'paymentMethodName' => ['required', 'string', 'max:255'],
+            'paymentMethodCode' => [
+                'required',
+                'string',
+                'max:50',
+                Rule::unique('room_payment_methods', 'code')->ignore($ignoreId),
+            ],
+            'paymentMethodAccountName' => ['nullable', 'string', 'max:255'],
+            'paymentMethodAccountNumber' => ['nullable', 'string', 'max:255'],
+            'paymentMethodInstructions' => ['nullable', 'string', 'max:1000'],
+            'paymentMethodQrCode' => ['nullable', 'image', 'max:5120'],
+            'paymentMethodIsEnabled' => ['required', 'boolean'],
+            'paymentMethodSortOrder' => ['required', 'integer', 'min:0'],
+        ];
+    }
+
+    private function resetPaymentMethodForm(): void
+    {
+        $this->reset(
+            'paymentMethodId',
+            'paymentMethodName',
+            'paymentMethodCode',
+            'paymentMethodAccountName',
+            'paymentMethodAccountNumber',
+            'paymentMethodInstructions',
+            'paymentMethodQrCode',
+            'paymentMethodCurrentQrPath',
+            'paymentMethodIsEnabled',
+            'paymentMethodSortOrder'
+        );
+        $this->paymentMethodIsEnabled = true;
+        $this->paymentMethodSortOrder = 0;
+    }
+
 };
 ?>
 
@@ -590,6 +824,16 @@ new class extends Component
                         : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800' }}">
                 <svg class="w-4 h-4 opacity-75" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
                 <span>Add-on Services</span>
+            </div>
+
+            {{-- Tab 5: Payment Methods --}}
+            <div wire:click="$set('tabNum', 5)"
+                class="group flex items-center gap-3 px-3.5 py-3 rounded-xl cursor-pointer transition-all font-medium text-sm
+                    {{ $tabNum === 5
+                        ? 'bg-green-700 text-white dark:bg-indigo-600 shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800' }}">
+                <svg class="w-4 h-4 opacity-75" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+                <span>Payment Methods</span>
             </div>
         </div>
     </aside>
@@ -708,6 +952,65 @@ new class extends Component
                         <div class="flex items-center gap-1.5">
                             <x-ts-button xs color="secondary" wire:click="editAddonServiceAction({{ $row->id }})">Edit</x-ts-button>
                             <x-ts-button xs color="rose" wire:click="deleteAddonServiceAction({{ $row->id }})">Delete</x-ts-button>
+                        </div>
+                    @endinteract
+                </x-ts-table>
+            @endif
+
+            @if ($tabNum === 5)
+                <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-900 dark:text-white">Payment Methods</h2>
+                        <p class="text-sm text-slate-500">Configure accepted payment channels, account credentials, and scannable QR codes</p>
+                    </div>
+                    <x-ts-button color="emerald" wire:click="openPaymentMethodModal">
+                        + Add Payment Method
+                    </x-ts-button>
+                </div>
+
+                <x-ts-table :headers="$paymentMethodHeaders" :rows="$paymentMethodRows" loading paginate>
+                    @interact('column_name', $row)
+                        <div>
+                            <span class="font-bold text-slate-900 dark:text-white text-sm">{{ $row->name }}</span>
+                            @if($row->instructions)
+                                <p class="text-xs text-slate-500 font-light truncate max-w-xs mt-0.5">{{ $row->instructions }}</p>
+                            @endif
+                        </div>
+                    @endinteract
+                    @interact('column_code', $row)
+                        <span class="font-mono text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded font-bold">
+                            {{ $row->code }}
+                        </span>
+                    @endinteract
+                    @interact('column_account_name', $row)
+                        <span class="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                            {{ $row->account_name ?: '—' }}
+                        </span>
+                    @endinteract
+                    @interact('column_account_number', $row)
+                        <span class="font-mono text-xs font-semibold text-slate-800 dark:text-slate-200">
+                            {{ $row->account_number ?: '—' }}
+                        </span>
+                    @endinteract
+                    @interact('column_qr_code_path', $row)
+                        @if($row->qr_code_path)
+                            <a href="{{ $row->qr_code_url ?? (str_starts_with($row->qr_code_path, 'http') ? $row->qr_code_path : Storage::disk('public')->url($row->qr_code_path)) }}" target="_blank" class="inline-flex items-center gap-1.5 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors">
+                                <span>📱</span> View QR
+                            </a>
+                        @else
+                            <span class="text-xs text-slate-400 italic">No QR code</span>
+                        @endif
+                    @endinteract
+                    @interact('column_is_enabled', $row)
+                        <button type="button" wire:click="togglePaymentMethodStatus({{ $row->id }})"
+                                class="px-2.5 py-1 rounded-full text-xs font-bold transition-all cursor-pointer {{ $row->is_enabled ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-rose-100 text-rose-800 hover:bg-rose-200' }}">
+                            {{ $row->is_enabled ? 'Enabled' : 'Disabled' }}
+                        </button>
+                    @endinteract
+                    @interact('column_action', $row)
+                        <div class="flex items-center gap-1.5">
+                            <x-ts-button xs color="secondary" wire:click="editPaymentMethodAction({{ $row->id }})">Edit</x-ts-button>
+                            <x-ts-button xs color="rose" wire:click="deletePaymentMethodAction({{ $row->id }})">Delete</x-ts-button>
                         </div>
                     @endinteract
                 </x-ts-table>
@@ -889,6 +1192,139 @@ new class extends Component
                         Save Changes
                     </button>
                     <button type="button" wire:click="$set('editAddonServiceModal', false)" class="text-sm text-slate-600 hover:text-slate-900">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </x-ts-card>
+    </x-ts-modal>
+
+    {{-- Create Payment Method Modal --}}
+    <x-ts-modal title="Create Payment Method" wire="createPaymentMethodModal" size="xl">
+        <x-ts-card loading loading="savePaymentMethodAction">
+            <form wire:submit.prevent="savePaymentMethodAction" class="space-y-4">
+                <x-ts-input label="Payment Method Name *" hint="e.g. GCash, Maya, BDO Unibank" wire:model.live="paymentMethodName" />
+                <x-ts-input label="Code / Identifier *" hint="Slug identifier e.g. gcash, maya, bank_transfer" wire:model="paymentMethodCode" />
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <x-ts-input label="Account Name" hint="e.g. Agro-Inland Resort" wire:model="paymentMethodAccountName" />
+                    <x-ts-input label="Account Number / Mobile Number" hint="e.g. 0912-345-6789" wire:model="paymentMethodAccountNumber" />
+                </div>
+
+                <div>
+                    <label for="pm-instructions" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Instructions</label>
+                    <textarea id="pm-instructions" wire:model="paymentMethodInstructions" rows="2"
+                        placeholder="Instructions displayed to customers during checkout..."
+                        class="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"></textarea>
+                    @error('paymentMethodInstructions')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">QR Code Image</label>
+                    <input type="file" wire:model="paymentMethodQrCode" accept="image/*"
+                           class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100">
+                    <p class="text-[11px] text-slate-400 mt-1">Upload QR code image (PNG, JPG, max 5MB)</p>
+                    @error('paymentMethodQrCode')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                    @if($paymentMethodQrCode)
+                        <div class="mt-2 p-2 bg-slate-50 rounded-xl inline-block border border-slate-200">
+                            <p class="text-[10px] text-slate-500 mb-1">New QR Preview:</p>
+                            <img src="{{ $paymentMethodQrCode->temporaryUrl() }}" class="w-28 h-28 object-contain rounded-lg">
+                        </div>
+                    @endif
+                </div>
+
+                <div>
+                    <label for="pm-sort-order" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Display Order</label>
+                    <input id="pm-sort-order" type="number" min="0" wire:model="paymentMethodSortOrder"
+                        class="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+                    @error('paymentMethodSortOrder')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                </div>
+
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input type="checkbox" wire:model="paymentMethodIsEnabled" class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                    <span class="font-medium">Enable this payment method immediately</span>
+                </label>
+
+                <div class="flex items-center gap-3 border-t border-stone-100 pt-4">
+                    <button type="submit" class="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700">
+                        Create Payment Method
+                    </button>
+                    <button type="button" wire:click="$set('createPaymentMethodModal', false)" class="text-sm text-slate-600 hover:text-slate-900">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </x-ts-card>
+    </x-ts-modal>
+
+    {{-- Edit Payment Method Modal --}}
+    <x-ts-modal title="Edit Payment Method" wire="editPaymentMethodModal" size="xl">
+        <x-ts-card loading loading="savePaymentMethodUpdateAction">
+            <form wire:submit.prevent="savePaymentMethodUpdateAction" class="space-y-4">
+                <x-ts-input label="Payment Method Name *" wire:model.live="paymentMethodName" />
+                <x-ts-input label="Code / Identifier *" wire:model="paymentMethodCode" />
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <x-ts-input label="Account Name" wire:model="paymentMethodAccountName" />
+                    <x-ts-input label="Account Number / Mobile Number" wire:model="paymentMethodAccountNumber" />
+                </div>
+
+                <div>
+                    <label for="edit-pm-instructions" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Instructions</label>
+                    <textarea id="edit-pm-instructions" wire:model="paymentMethodInstructions" rows="2"
+                        class="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white"></textarea>
+                    @error('paymentMethodInstructions')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">QR Code Image</label>
+                    @if($paymentMethodCurrentQrPath)
+                        <div class="mb-2 p-2 bg-slate-50 rounded-xl inline-block border border-slate-200">
+                            <p class="text-[10px] text-slate-500 mb-1">Current QR Code:</p>
+                            <img src="{{ str_starts_with($paymentMethodCurrentQrPath, 'http') ? $paymentMethodCurrentQrPath : Storage::disk('public')->url($paymentMethodCurrentQrPath) }}" class="w-28 h-28 object-contain rounded-lg">
+                        </div>
+                    @endif
+                    <input type="file" wire:model="paymentMethodQrCode" accept="image/*"
+                           class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100">
+                    <p class="text-[11px] text-slate-400 mt-1">Upload to replace existing QR code</p>
+                    @error('paymentMethodQrCode')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                    @if($paymentMethodQrCode)
+                        <div class="mt-2 p-2 bg-slate-50 rounded-xl inline-block border border-slate-200">
+                            <p class="text-[10px] text-emerald-600 font-semibold mb-1">New QR Preview:</p>
+                            <img src="{{ $paymentMethodQrCode->temporaryUrl() }}" class="w-28 h-28 object-contain rounded-lg">
+                        </div>
+                    @endif
+                </div>
+
+                <div>
+                    <label for="edit-pm-sort-order" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Display Order</label>
+                    <input id="edit-pm-sort-order" type="number" min="0" wire:model="paymentMethodSortOrder"
+                        class="w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+                    @error('paymentMethodSortOrder')
+                        <p class="mt-1 text-sm text-rose-600">{{ $message }}</p>
+                    @enderror
+                </div>
+
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input type="checkbox" wire:model="paymentMethodIsEnabled" class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                    <span class="font-medium">Active (Available on Checkout)</span>
+                </label>
+
+                <div class="flex items-center gap-3 border-t border-stone-100 pt-4">
+                    <button type="submit" class="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700">
+                        Save Changes
+                    </button>
+                    <button type="button" wire:click="$set('editPaymentMethodModal', false)" class="text-sm text-slate-600 hover:text-slate-900">
                         Cancel
                     </button>
                 </div>

@@ -14,7 +14,7 @@ new class extends Component
     public function mount(int $id)
     {
        $room = Room::find($id);
-        $room->load(['category', 'amenities', 'photos', 'bookings' => fn ($q) => $q->latest()->take(10)]);
+        $room->load(['category', 'amenities', 'photos', 'addonServices', 'bookings' => fn ($q) => $q->latest()->take(10)]);
         $this->room = $room;
         
     }
@@ -99,6 +99,7 @@ new class extends Component
                         <p class="text-xs font-semibold text-stone-400 uppercase tracking-wide mb-3">Room Info</p>
                         <div class="space-y-2 text-sm">
                             <div><span class="text-stone-500">Category:</span> <span class="font-medium">{{ $room->category?->name }}</span></div>
+                            <div><span class="text-stone-500">Type:</span> <span class="font-medium capitalize">{{ $room->type === 'cottage' ? 'Cottage' : 'Room' }}</span></div>
                             <div><span class="text-stone-500">Booking Type:</span> <span class="font-medium capitalize">{{ str_replace('_', ' ', $room->booking_type) }}</span></div>
                             <div><span class="text-stone-500">Status:</span>
                                 <span class="ml-1 px-2 py-0.5 rounded text-xs font-medium
@@ -135,6 +136,26 @@ new class extends Component
                     <div class="flex flex-wrap gap-2">
                         @foreach($room->amenities as $amenity)
                             <span class="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-sm rounded-xl font-medium">✓ {{ $amenity->name }}</span>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+
+            {{-- Scoped Addons --}}
+            @if($room->addonServices->isNotEmpty())
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-stone-100">
+                    <h3 class="font-bold text-stone-900 mb-3">Available Add-On Services</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        @foreach($room->addonServices as $addon)
+                            <div class="p-3 bg-stone-50 rounded-xl border border-stone-100 flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm font-semibold text-stone-900">{{ $addon->name }}</p>
+                                    <p class="text-xs text-stone-500">₱{{ number_format($addon->price, 2) }} / {{ str_replace('_', ' ', $addon->pricing_type) }}</p>
+                                </div>
+                                <span class="px-2.5 py-1 bg-white text-stone-700 text-xs font-bold rounded-lg border border-stone-200">
+                                    Max: {{ $addon->pivot->max_quantity }}
+                                </span>
+                            </div>
                         @endforeach
                     </div>
                 </div>

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Models\Suite\Amenity;
 use App\Models\Suite\Room;
+use App\Models\Suite\RoomAddonService;
 use App\Models\Suite\RoomCategory;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\DB;
@@ -29,8 +30,11 @@ new class () extends Component {
     public ?string $floor_number = '1';
     public string $status = 'available';
     public string $booking_type = 'both';
+    public string $type = 'room';
     public bool $is_active = true;
     public array $amenities = [];
+    public array $assignedAddons = [];
+    public bool $addonModal = false;
     public array $photos = [];
 
     public function getCategoriesProperty(): EloquentCollection
@@ -44,6 +48,37 @@ new class () extends Component {
     public function getAmenityOptionsProperty(): EloquentCollection
     {
         return Amenity::query()->orderBy('name')->get();
+    }
+
+    public function getAddonServiceOptionsProperty(): EloquentCollection
+    {
+        return RoomAddonService::query()->where('is_active', true)->orderBy('sort_order')->orderBy('name')->get();
+    }
+
+    public function openAddonModal(): void
+    {
+        $this->addonModal = true;
+    }
+
+    public function addAddon(int $id): void
+    {
+        $addon = RoomAddonService::find($id);
+        if ($addon) {
+            $this->assignedAddons[$id] = [
+                'id' => $addon->id,
+                'name' => $addon->name,
+                'price' => (float) $addon->price,
+                'pricing_type' => $addon->pricing_type,
+                'max_quantity' => null,
+            ];
+            $this->toast()->success('Added', $addon->name.' assigned to unit')->send();
+        }
+        $this->addonModal = false;
+    }
+
+    public function removeAddon(int $id): void
+    {
+        unset($this->assignedAddons[$id]);
     }
 
     public function clearPhotos(): void
@@ -66,6 +101,7 @@ new class () extends Component {
             'floor_number' => ['nullable', 'integer', 'min:0', 'max:65535'],
             'status' => ['required', Rule::in(['available', 'occupied', 'maintenance', 'housekeeping', 'blocked', 'out_of_service'])],
             'booking_type' => ['required', Rule::in(['overnight', 'day_pass', 'both'])],
+            'type' => ['required', Rule::in(['room', 'cottage'])],
             'is_active' => ['boolean'],
             'amenities' => ['array'],
             'amenities.*' => ['integer', 'distinct', 'exists:room_amenities,id'],
@@ -94,6 +130,7 @@ new class () extends Component {
                 : null,
             'status' => $validated['status'],
             'booking_type' => $validated['booking_type'],
+            'type' => $validated['type'],
             'is_active' => $validated['is_active'] ?? false,
         ];
         $amenityIds = $validated['amenities'] ?? [];
@@ -103,6 +140,15 @@ new class () extends Component {
             $room = DB::transaction(function () use ($roomAttributes, $amenityIds, &$storedPaths): Room {
                 $room = Room::create($roomAttributes);
                 $room->amenities()->sync($amenityIds);
+
+                $addonSync = [];
+                foreach ($this->assignedAddons as $addonId => $data) {
+                    $limit = ! empty($data['max_quantity']) && (int) $data['max_quantity'] > 0 ? (int) $data['max_quantity'] : null;
+                    $addonSync[(int) $addonId] = [
+                        'max_quantity' => $limit,
+                    ];
+                }
+                $room->addonServices()->sync($addonSync);
 
                 foreach ($this->photos as $index => $photo) {
                     $path = $photo->store("rooms/{$room->id}", 'public');
@@ -180,6 +226,14 @@ new class () extends Component {
                         </select>
                         @error('booking_type')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-stone-700 mb-1.5">Accommodation Type *</label>
+                        <select wire:model="type" required class="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            <option value="room">Room / Suite</option>
+                            <option value="cottage">Cottage / Villa</option>
+                        </select>
+                        @error('type')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+                    </div>
                     <div class="sm:col-span-2">
                         <label class="block text-sm font-medium text-stone-700 mb-1.5">Description</label>
                         <textarea wire:model="description" rows="3" class="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"></textarea>
@@ -250,6 +304,93 @@ new class () extends Component {
                 @error('amenities')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
                 @error('amenities.*')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
             </div>
+
+            {{-- Scoped Add-on Services --}}
+            <div class="bg-white rounded-2xl p-6 shadow-sm border border-stone-100 space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+                    <div>
+                        <h3 class="font-bold text-stone-900">Add-On Services (Scoped Availability)</h3>
+                        <p class="text-xs text-stone-500 mt-0.5">Select which add-ons are available for this unit. Leave Max Qty empty for unlimited.</p>
+                    </div>
+                    <button type="button" wire:click="openAddonModal"
+                            class="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs uppercase tracking-wider transition-colors shadow-xs">
+                        <span>+</span> Add Add-on Service
+                    </button>
+                </div>
+
+                @if(!empty($assignedAddons))
+                    <div class="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden bg-white">
+                        @foreach($assignedAddons as $addonId => $assigned)
+                            <div wire:key="assigned-addon-{{ $addonId }}" class="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-stone-50/50 transition-colors">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs">
+                                        ✨
+                                    </div>
+                                    <div>
+                                        <p class="text-sm font-semibold text-stone-900">{{ $assigned['name'] }}</p>
+                                        <p class="text-xs text-stone-500">₱{{ number_format((float) $assigned['price'], 2) }} · {{ str_replace('_', ' ', $assigned['pricing_type']) }}</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-3 self-end sm:self-center">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-xs text-stone-500 font-medium">Max Limit:</span>
+                                        <input type="number" min="1" max="99" wire:model="assignedAddons.{{ $addonId }}.max_quantity"
+                                               placeholder="Unlimited"
+                                               class="w-24 px-2.5 py-1.5 border border-stone-300 rounded-lg text-xs text-center font-bold text-stone-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white placeholder:font-normal placeholder:text-stone-400">
+                                    </div>
+                                    <button type="button" wire:click="removeAddon({{ $addonId }})"
+                                            class="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                            title="Remove add-on">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                    </button>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="p-6 border-2 border-dashed border-stone-200 rounded-xl text-center space-y-2 bg-stone-50/50">
+                        <p class="text-xs text-stone-500 font-light">No scoped add-on services assigned to this accommodation.</p>
+                        <button type="button" wire:click="openAddonModal" class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:underline cursor-pointer">
+                            + Click here to assign add-on services
+                        </button>
+                    </div>
+                @endif
+            </div>
+
+            {{-- TallStackUI Modal for Add-on Selection --}}
+            <x-ts-modal title="Assign Add-On Service" wire="addonModal" size="lg">
+                <x-ts-card>
+                    <p class="text-xs text-stone-500 mb-4">Select an active add-on service to configure for this accommodation unit.</p>
+                    <div class="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                        @forelse($this->addonServiceOptions as $addon)
+                            @php $isAssigned = isset($assignedAddons[$addon->id]); @endphp
+                            <div wire:key="modal-addon-{{ $addon->id }}" class="flex items-center justify-between p-3 rounded-xl border {{ $isAssigned ? 'bg-emerald-50/40 border-emerald-200' : 'bg-white border-stone-200 hover:border-emerald-300' }} transition-colors">
+                                <div>
+                                    <p class="text-sm font-semibold text-stone-900">{{ $addon->name }}</p>
+                                    <p class="text-xs text-stone-500">₱{{ number_format((float) $addon->price, 2) }} · {{ str_replace('_', ' ', $addon->pricing_type) }}</p>
+                                    @if($addon->description)
+                                        <p class="text-[11px] text-stone-400 font-light mt-0.5 line-clamp-1">{{ $addon->description }}</p>
+                                    @endif
+                                </div>
+                                <div>
+                                    @if($isAssigned)
+                                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold text-emerald-800 bg-emerald-100">
+                                            ✓ Added
+                                        </span>
+                                    @else
+                                        <button type="button" wire:click="addAddon({{ $addon->id }})"
+                                                class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs cursor-pointer">
+                                            + Select
+                                        </button>
+                                    @endif
+                                </div>
+                            </div>
+                        @empty
+                            <p class="text-xs text-stone-400 italic text-center py-4">No active add-on services available.</p>
+                        @endforelse
+                    </div>
+                </x-ts-card>
+            </x-ts-modal>
 
             <div class="bg-white rounded-2xl p-6 shadow-sm border border-stone-100"
                  x-data="{

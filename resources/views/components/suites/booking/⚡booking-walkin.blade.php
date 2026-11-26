@@ -6,6 +6,7 @@ use App\Events\NewBookingReceived;
 use App\Models\Suite\RoomAddonService as AddonService;
 use App\Models\Suite\RoomBooking as Booking;
 use App\Models\Suite\RoomBookingAddon as BookingAddon;
+use App\Models\Suite\RoomPaymentMethod;
 use App\Models\Suite\Room;
 use App\Models\Suite\RoomCategory;
 use App\Models\User;
@@ -135,7 +136,16 @@ new class extends Component
 
     public function getAvailableAddonsProperty(): EloquentCollection
     {
+        if ($this->selectedRoom) {
+            return $this->selectedRoom->addonServices()->where('is_active', true)->get();
+        }
+
         return AddonService::where('is_active', true)->orderBy('sort_order')->get();
+    }
+
+    public function getPaymentMethodsProperty(): EloquentCollection
+    {
+        return RoomPaymentMethod::enabled()->get();
     }
 
     public function getAvailableRoomsProperty(): Collection
@@ -471,9 +481,14 @@ new class extends Component
                              class="relative p-3.5 rounded-2xl border-2 transition-all cursor-pointer {{ $isSelected ? 'border-emerald-600 bg-emerald-50/50 shadow-md ring-2 ring-emerald-500/30' : ($canBook ? 'border-stone-200 hover:border-emerald-400 bg-white hover:bg-stone-50/50' : 'border-stone-200 bg-stone-50/70 opacity-60 cursor-not-allowed') }}">
                             <div class="flex items-start justify-between gap-2 mb-2">
                                 <div>
-                                    <span class="inline-block px-2 py-0.5 rounded text-[11px] font-extrabold font-mono {{ $isSelected ? 'bg-emerald-600 text-white' : 'bg-stone-800 text-white' }}">
-                                        Room {{ $room->room_number }}
-                                    </span>
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="inline-block px-2 py-0.5 rounded text-[11px] font-extrabold font-mono {{ $isSelected ? 'bg-emerald-600 text-white' : 'bg-stone-800 text-white' }}">
+                                            Room {{ $room->room_number }}
+                                        </span>
+                                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider {{ $room->type === 'cottage' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800' }}">
+                                            {{ ucfirst($room->type ?? 'room') }}
+                                        </span>
+                                    </div>
                                     <p class="font-bold text-stone-900 text-sm mt-1 truncate">{{ $room->name }}</p>
                                     <p class="text-[11px] text-stone-500">{{ $room->category?->name }}</p>
                                 </div>
@@ -707,10 +722,11 @@ new class extends Component
                         <label class="block text-xs font-semibold text-stone-700 mb-1">Payment Method</label>
                         <select wire:model="paymentMethod"
                                 class="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                            <option value="cash">Cash Settlement</option>
-                            <option value="card">Credit / Debit Card</option>
-                            <option value="gcash">GCash</option>
-                            <option value="bank_transfer">Bank Transfer</option>
+                            @forelse($this->paymentMethods as $pm)
+                                <option value="{{ $pm->code }}">{{ $pm->name }}</option>
+                            @empty
+                                <option value="cash">Cash Settlement</option>
+                            @endforelse
                         </select>
                     </div>
                 @endif
